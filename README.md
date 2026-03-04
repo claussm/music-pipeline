@@ -14,6 +14,8 @@ One library sat at around 500GB, the other closer to 750GB. Both were reasonably
 
 My wife's library had an additional structural problem: many files were nested several levels deeper than beets expects, which caused beets to either skip them entirely or misidentify the album structure. A preprocessing step was needed just to make the library ingestable.
 
+<img width="804" height="251" alt="Image" src="https://github.com/user-attachments/assets/1dcee79d-ffbc-4c8f-88a6-8c842a7b00d6" />
+
 ### The approach
 
 **Step 1 — Flatten deep folder structures.** A Python script was written to traverse my wife's library and restructure directories where tracks were buried too deep (e.g. `Artist/Album/CD1/Disc 1/track.flac` → `Artist/Album/track.flac`). This was a prerequisite for beets being able to process anything reliably.
