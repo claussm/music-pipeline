@@ -32,16 +32,6 @@ This categorisation meant nothing got silently dropped — the "needs review" pi
 
 ---
 
-## 📁 Repo Structure
-
-```
-.
-├── README.md                      # this file
-└── syncthing-beets-watcher.py     # the daemon — configure and deploy this
-```
-
----
-
 ## 📐 Architecture Overview
 
 ```
