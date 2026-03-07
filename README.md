@@ -14,7 +14,9 @@ One library sat at around 500GB, the other closer to 750GB. Both were reasonably
 
 My wife's library had an additional structural problem: many files were nested several levels deeper than beets expects, which caused beets to either skip them entirely or misidentify the album structure. A preprocessing step was needed just to make the library ingestable.
 
+
 <img width="804" height="251" alt="Image" src="https://github.com/user-attachments/assets/1dcee79d-ffbc-4c8f-88a6-8c842a7b00d6" />
+
 
 ### The approach
 
@@ -31,6 +33,17 @@ My wife's library had an additional structural problem: many files were nested s
 This categorisation meant nothing got silently dropped — the "needs review" pile could be worked through manually without holding up the rest of the import.
 
 **Step 4 — beets import.** Once the folder structure was normalised and duplicates resolved, beets was run against the full staged collection. beets handled the final tagging (pulling from MusicBrainz), canonical renaming, and moving files into the unified library structure.
+
+---
+
+## 📁 Repo Structure
+
+```
+.
+├── README.md                             # this file
+├── syncthing-beets-watcher.py            # the daemon — configure and deploy this
+└── syncthing-beets-watcher-launcher.sh   # bash launcher (runs the daemon via Docker)
+```
 
 ---
 
@@ -169,18 +182,32 @@ The configuration block at the top of the script is the only thing you need to e
 SYNCTHING_URL        = "http://localhost:8384"
 SYNCTHING_CONFIG     = "/mnt/user/appdata/syncthing/config.xml"
 MUSIC_FOLDER_LABEL   = "NewMusic"
+MUSIC_INBOX_PATH     = "/mnt/user/Media/Music-inbox"   # filesystem path of the inbox
 BEETS_SCRIPT         = "/boot/config/plugins/user.scripts/scripts/beets-inbox-import/script"
 PLEX_URL             = "http://localhost:32400"
-PLEX_PREFS           = "/mnt/user/appdata/PlexMediaServer/Preferences.xml"
+PLEX_PREFS           = "/mnt/user/appdata/Plex-Media-Server/Library/Application Support/Plex Media Server/Preferences.xml"
 PLEX_LIBRARY_TYPE    = "artist"
 DEBOUNCE_SECS        = 20
 ```
 
-**Deployment on Unraid:**
+> ⚠️ **Note on `PLEX_PREFS`**: The path to `Preferences.xml` varies by Plex installation. The path above is the default for the `plexinc/pms-docker` container on Unraid. If yours differs, run `find /mnt/user/appdata -name "Preferences.xml" 2>/dev/null` on the host to locate it.
+
+**Deployment on Unraid** (two-file approach — Unraid has no Python binary on the host):
+
+The watcher runs inside the existing `lscr.io/linuxserver/beets` Docker image, which has Python 3. A small bash launcher script handles starting/restarting the container.
+
 1. In the User Scripts plugin, create a new script called `syncthing-beets-watcher`
-2. Paste the contents of `syncthing-beets-watcher.py` as the script body
-3. Set the schedule to **At Startup of Array**
-4. Click **Run in Background**
+2. Paste the contents of **`syncthing-beets-watcher-launcher.sh`** as the script body
+3. Save a copy of **`syncthing-beets-watcher.py`** to the same User Scripts directory as `watcher.py`:
+   ```
+   /boot/config/plugins/user.scripts/scripts/syncthing-beets-watcher/watcher.py
+   ```
+4. Set the schedule to **At Startup of Array**
+5. Click **Run in Background**
+
+The launcher uses `docker run --network=host` so `localhost:8384` (Syncthing) and `localhost:32400` (Plex) resolve correctly from inside the container. It also mounts `/var/run/docker.sock` and `/usr/bin/docker` so the watcher can call `docker exec beets` to trigger imports.
+
+> ⚠️ **Gotcha**: The watcher container must mount every host path that the `beets-inbox-import` script references directly — not just paths the Python daemon itself uses. In particular, `/mnt/user/appdata/beets/db` must be mounted so that `tee` can write the import log. If this mount is missing, `tee` fails with "No such file or directory", beets exits with code 1, and `.stignore` is never written — even though beets actually ran successfully. The provided launcher script already includes this mount.
 
 Plex integration is optional and non-fatal — if the token or library can't be found, the watcher still runs and triggers beets normally.
 
@@ -195,6 +222,11 @@ If Syncthing is running in a Docker container (as it typically does on Unraid), 
 
 **Send Only / Receive Only pairing**
 If both sides are set to "Send & Receive", Syncthing may attempt to delete files on the VPS after they're moved locally. Set VPS to **Send Only** and NAS to **Receive Only** (or **Receive Encrypted**) to prevent this.
+
+**"Local Additions" after beets runs**
+When beets moves files out of the Receive Only inbox, Syncthing flags the missing files as local changes and shows a "Local Additions" / "Revert to Global State" prompt. The watcher script handles this automatically: it snapshots the inbox contents before beets runs, then appends those paths to the folder's `.stignore` file (with a leading `/` to pin them to the folder root) and triggers a rescan. Syncthing then treats the moved files as intentionally ignored and clears the notification — without touching the VPS copies or affecting seeding.
+
+`.stignore` is never synced between peers, so the VPS is completely unaware of these entries. The file accumulates one entry per imported album over time but remains small and has no meaningful performance impact. One side effect: if the same release is re-torrented later, the `.stignore` entry will silently prevent it from syncing to the NAS, which is usually the right behaviour.
 
 ---
 
@@ -214,6 +246,7 @@ Set AutoMove to trigger **On Finish** (not on add) so files are only moved once 
 - The `timeout` parameter causes the request to block until an event arrives or the timeout elapses — this is ideal for a daemon; no polling loop needed
 - Always read `since` from the last event ID you processed to avoid replaying old events on reconnect
 - After a `StateChanged` → `idle` event, double-check with `/rest/db/completion?folder={id}` before triggering import — the folder can go idle briefly between chunks
+- **Syncthing v2 API field rename**: In Syncthing v2, the `/rest/db/completion` response uses `needItems` and `needDeletes` — **not** `needFiles`, `needDirectories`, and `needSymlinks` (which were the v1 field names). If you're building your own watcher, use `needItems`. The watcher script here already handles this correctly.
 
 ---
 
